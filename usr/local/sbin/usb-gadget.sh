@@ -1,12 +1,16 @@
 #!/bin/bash
 
 gadget=/sys/kernel/config/usb_gadget/pi4
+use_mass_storage=1
 
 if [[ ! -e "/etc/usb-gadgets/$1" ]]; then
     echo "No such config, $1, found in /etc/usb-gadgets"
     exit 1
 fi
 source /etc/usb-gadgets/$1
+
+# load libcomposite module
+modprobe libcomposite
 
 mkdir -p ${gadget}
 echo "${vendor_id}" >${gadget}/idVendor
@@ -25,7 +29,7 @@ echo "${manufacturer}" >${gadget}/strings/0x409/manufacturer
 echo "${product}" >${gadget}/strings/0x409/product
 echo "${serial}" >${gadget}/strings/0x409/serialnumber
 
-mkdir ${gadget}/configs/c.1
+mkdir -p ${gadget}/configs/c.1
 echo "${power}" >${gadget}/configs/c.1/MaxPower
 if [ ! -z "${attr}" ]; then
     echo "${attr}" >${gadget}/configs/c.1/bmAttributes
@@ -61,6 +65,33 @@ if [ "${config1}" = "RNDIS" ]; then
     ln -s ${gadget}/functions/rndis.usb0 ${gadget}/configs/c.1
 fi
 
+if [ "${use_mass_storage}" = 1 ]; then
+    # ensure function is loaded
+    modprobe usb_f_mass_storage
+    # create the function (name must match a usb_f_<name> module such as 'acm')
+    mkdir -p ${gadget}/functions/mass_storage.usb0
+    # configure mass storage gadget and logical units
+    echo 0 >${gadget}/functions/mass_storage.usb0/stall
+    mkdir -p ${gadget}/functions/mass_storage.usb0/lun.0
+    echo 0 >${gadget}/functions/mass_storage.usb0/lun.0/cdrom
+    echo 0 >${gadget}/functions/mass_storage.usb0/lun.0/ro
+    echo 0 >${gadget}/functions/mass_storage.usb0/lun.0/nofua
+    echo 1 >${gadget}/functions/mass_storage.usb0/lun.0/removable
+    # associate logical unit 0 with boot partition
+    echo "/dev/mmcblk0p1" >${gadget}/functions/mass_storage.usb0/lun.0/file
+    mkdir -p ${gadget}/functions/mass_storage.usb0/lun.1
+    echo 0 >${gadget}/functions/mass_storage.usb0/lun.1/cdrom
+    echo 0 >${gadget}/functions/mass_storage.usb0/lun.1/ro
+    echo 0 >${gadget}/functions/mass_storage.usb0/lun.1/nofua
+    echo 1 >${gadget}/functions/mass_storage.usb0/lun.1/removable
+    # associate logical unit 1 with root partition (unusable on Windows because of missing ext4 support)
+    echo "/dev/mmcblk0p2" >${gadget}/functions/mass_storage.usb0/lun.1/file
+    # associate function with config
+    ln -s ${gadget}/functions/mass_storage.usb0 ${gadget}/configs/c.1/
+fi
+
+# enable gadget by binding it to a UDC from /sys/class/udc
+# to unbind it: echo "" > ${gadget}/UDC; sleep 1; rm -rf /sys/kernel/config/usb_gadget/pi4
 ls /sys/class/udc >${gadget}/UDC
 
 udevadm settle -t 5 || :
